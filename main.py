@@ -357,7 +357,16 @@ async def presence_ws(websocket: WebSocket, token: str = None):
         await redis_client.delete(f"pos:{user_id}")
 
 
+@app.get("/")
+def read_root():
+    """Root endpoint."""
+    return "Hello world! I'm the PresenceService with websocket."
+
+
 # ─── Health Check ─────────────────────────────────────────────
 @app.get("/health")
 async def health():
     return {"status": "ok", "users_online": len(manager.users)}
+
+
+
