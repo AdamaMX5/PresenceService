@@ -19,21 +19,19 @@ fi
 # ── Redis starten (falls nicht läuft) ────────────────────────
 echo ""
 echo "--- Redis ---"
-if docker ps --filter "name=presence-redis" --filter "status=running" | grep -q presence-redis; then
-    echo "  ✅ Redis läuft bereits"
-else
-    docker stop presence-redis 2>/dev/null || true
-    docker rm   presence-redis 2>/dev/null || true
 
-    docker run -d \
-      --name presence-redis \
-      --network presence-net \
-      --restart unless-stopped \
-      redis:7-alpine \
-      redis-server --save "" --appendonly no
+docker stop presence-redis 2>/dev/null || true
+docker rm   presence-redis 2>/dev/null || true
 
-    echo "  ✅ Redis gestartet"
-fi
+docker run -d \
+  --name presence-redis \
+  --network presence-net \
+  --restart unless-stopped \
+  redis:7-alpine \
+  redis-server --save "" --appendonly no
+
+echo "  ✅ Redis gestartet"
+
 
 # ── Alten Container stoppen ───────────────────────────────────
 echo ""
