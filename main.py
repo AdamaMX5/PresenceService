@@ -261,7 +261,7 @@ app.add_middleware(
 )
 
 PUBLIC_KEY = None
-AUTH_SERVICE_URL = os.getenv("AUTH_SERVICE_URL", "http://auth.freischule.info")
+AUTH_SERVICE_URL = os.getenv("AUTH_SERVICE_URL", "https://auth.freischule.info")
 
 
 async def fetch_public_key() -> str | None:
