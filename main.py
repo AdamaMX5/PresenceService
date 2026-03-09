@@ -7,6 +7,7 @@ import asyncio
 import json
 import math
 import jwt
+import httpx
 from contextlib import asynccontextmanager
 
 import redis.asyncio as aioredis
@@ -260,22 +261,32 @@ app.add_middleware(
 )
 
 PUBLIC_KEY = None
-KEY_PATH = os.getenv("AUTH_PUBLIC_KEY_PATH", "/secrets/auth_public_key.pem")
+AUTH_SERVICE_URL = os.getenv("AUTH_SERVICE_URL", "http://auth.freischule.info")
 
-try:
-    PUBLIC_KEY = open(KEY_PATH).read()
-    logger.info("Auth public key loaded – signature verification active")
-except FileNotFoundError:
-    logger.warning(
-        "⚠️  Auth public key NOT found at %s – "
-        "running in DEV MODE, JWT signatures are NOT verified!", KEY_PATH
-    )
+
+async def fetch_public_key() -> str | None:
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{AUTH_SERVICE_URL}/jwt/public-key",
+                timeout=5.0
+            )
+            data = response.json()
+            if data["status"] == "ok":
+                logger.info(f"[Auth] Public key loaded, algorithm: {data['algorithm']}")
+                return data["public_key"]
+            else:
+                logger.warning("[Auth] Public key not configured on auth service")
+                return None
+    except Exception as e:
+        logger.warning(f"[Auth] Could not fetch public key: {e}")
+        return None
 
 
 def decode_token(token: str) -> dict:
     if PUBLIC_KEY is None:
         # DEV MODE: Token nur dekodieren, Signatur ignorieren
-        logger.warning("DEV MODE: skipping signature check for token", token)
+        logger.warning("DEV MODE: skipping signature check for token: %s", token[:20])
         return jwt.decode(token, options={"verify_signature": False})
     else:
         return jwt.decode(token, PUBLIC_KEY, algorithms=["RS256"])
@@ -310,10 +321,10 @@ async def presence_ws(websocket: WebSocket, token: str = None):
             raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION, reason="Invalid token")
 
         # ── 2. User-Daten aus Token extrahieren ─────────────────
-        user_id = payload["user_id"]
-        name = payload["name"]
-        department = payload["department"]
-        roles = payload["roles"]
+        user_id = payload.get("sub")  # ← "sub" statt "user_id"
+        name = payload.get("name") or user_id  # Fallback auf sub
+        department = payload.get("department", "")
+        roles = payload.get("roles", [])
         await manager.connect(websocket, user_id, name, department)
 
     try:
@@ -332,7 +343,7 @@ async def presence_ws(websocket: WebSocket, token: str = None):
                 try:
                     new_payload = jwt.decode(data["token"], PUBLIC_KEY, algorithms=["RS256"])
                     # Sicherheitscheck: user_id darf sich nicht ändern!
-                    if new_payload["user_id"] != user_id:
+                    if new_payload.get("sub") != user_id:
                         raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION, reason="Token user_id mismatch")
 
                     payload = new_payload
