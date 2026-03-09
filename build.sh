@@ -48,6 +48,8 @@ echo "  ✅ Image gebaut"
 # ── Neuen Container starten ───────────────────────────────────
 echo ""
 echo "--- Start ---"
+docker stop presenceservice 2>/dev/null || true
+docker rm   presenceservice 2>/dev/null || true
 docker run -d \
   --name presenceservice \
   --network presence-net \
