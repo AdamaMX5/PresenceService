@@ -56,6 +56,8 @@ docker run -d \
   --restart unless-stopped \
   presenceservice
 
+docker network disconnect bridge presenceservice 2>/dev/null || true
+
 echo "  ✅ PresenceService gestartet auf Port 8002"
 
 # ── Health Check ──────────────────────────────────────────────
