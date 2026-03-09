@@ -1,134 +1,68 @@
 #!/bin/bash
-# ─────────────────────────────────────────────────────────────
-# deploy.sh – PresenceService Erstinstallation
-# Verwendung: sudo bash deploy.sh
-# ─────────────────────────────────────────────────────────────
-set -e  # Abbruch bei Fehler
+# build.sh – PresenceService Deploy
+# Verwendung: bash build.sh
 
-# ── Konfiguration ────────────────────────────────────────────
-SERVICE_NAME="presence-service"
-COMPOSE_FILE="docker-compose-presence.yml"
-WORK_DIR="$(cd "$(dirname "$0")" && pwd)"   # Ordner wo das Script liegt
+set -e
 
-# ── Farben ───────────────────────────────────────────────────
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-RED='\033[0;31m'
-NC='\033[0m'
+echo "=== PresenceService Deploy ==="
 
-info()    { echo -e "${GREEN}[✓]${NC} $1"; }
-warning() { echo -e "${YELLOW}[!]${NC} $1"; }
-error()   { echo -e "${RED}[✗]${NC} $1"; exit 1; }
-
-# ── Root-Check ───────────────────────────────────────────────
-if [ "$EUID" -ne 0 ]; then
-  error "Bitte als root ausführen: sudo bash deploy.sh"
-fi
-
+# ── Redis starten (falls nicht läuft) ────────────────────────
 echo ""
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "  PresenceService Deployment"
-echo "  Arbeitsverzeichnis: $WORK_DIR"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo ""
-
-# ── 1. Docker prüfen ─────────────────────────────────────────
-info "Prüfe Docker..."
-if ! command -v docker &> /dev/null; then
-  error "Docker nicht gefunden. Bitte zuerst Docker installieren: https://docs.docker.com/engine/install/"
-fi
-
-if ! docker compose version &> /dev/null; then
-  error "Docker Compose Plugin nicht gefunden. Bitte 'docker compose' (v2) installieren."
-fi
-
-DOCKER_VERSION=$(docker --version)
-info "Docker gefunden: $DOCKER_VERSION"
-
-# ── 2. Compose-Datei prüfen ──────────────────────────────────
-info "Prüfe Compose-Datei..."
-if [ ! -f "$WORK_DIR/$COMPOSE_FILE" ]; then
-  error "Compose-Datei nicht gefunden: $WORK_DIR/$COMPOSE_FILE"
-fi
-
-# ── 3. .env prüfen ───────────────────────────────────────────
-info "Prüfe Umgebungsvariablen..."
-if [ ! -f "$WORK_DIR/.env" ]; then
-  warning ".env nicht gefunden – erstelle Vorlage..."
-  cat > "$WORK_DIR/.env" << EOF
-# PresenceService Konfiguration
-AUTH_SERVICE_URL=https://auth.freischule.info
-REDIS_URL=redis://redis:6379
-EOF
-  warning ".env erstellt – bitte Werte prüfen: $WORK_DIR/.env"
+echo "--- Redis ---"
+if docker ps --filter "name=presence-redis" --filter "status=running" | grep -q presence-redis; then
+    echo "  ✅ Redis läuft bereits"
 else
-  info ".env gefunden"
+    docker stop presence-redis 2>/dev/null || true
+    docker rm   presence-redis 2>/dev/null || true
+
+    docker run -d \
+      --name presence-redis \
+      --restart unless-stopped \
+      redis:7-alpine \
+      redis-server --save "" --appendonly no
+
+    echo "  ✅ Redis gestartet"
 fi
 
-# ── 4. Docker Image bauen ─────────────────────────────────────
-info "Baue Docker Image..."
-docker compose -f "$WORK_DIR/$COMPOSE_FILE" build --no-cache
-info "Image erfolgreich gebaut"
+# ── Alten Container stoppen ───────────────────────────────────
+echo ""
+echo "--- Build ---"
+docker stop presenceservice 2>/dev/null || true
+docker rm   presenceservice 2>/dev/null || true
 
-# ── 5. Container starten ──────────────────────────────────────
-info "Starte Container..."
-docker compose -f "$WORK_DIR/$COMPOSE_FILE" up -d
-info "Container gestartet"
+# ── Neues Image bauen ─────────────────────────────────────────
+docker build --no-cache -t presenceservice .
+echo "  ✅ Image gebaut"
 
-# ── 6. Kurz warten und Health Check ──────────────────────────
-info "Warte auf Service-Start..."
+# ── Neuen Container starten ───────────────────────────────────
+echo ""
+echo "--- Start ---"
+docker run -d \
+  --name presenceservice \
+  -p 8002:8000 \
+  --link presence-redis:redis \
+  --env-file .env \
+  --restart unless-stopped \
+  presenceservice
+
+echo "  ✅ PresenceService gestartet auf Port 8002"
+
+# ── Health Check ──────────────────────────────────────────────
+echo ""
+echo "--- Health Check ---"
 sleep 3
-
-if curl -sf http://localhost:8000/health > /dev/null 2>&1; then
-  info "Health Check OK – Service läuft"
+if curl -sf http://localhost:8002/health > /dev/null 2>&1; then
+    echo "  ✅ Service antwortet"
+    curl -s http://localhost:8002/health
+    echo ""
 else
-  warning "Health Check fehlgeschlagen – Service startet möglicherweise noch"
-  warning "Prüfe mit: docker compose -f $COMPOSE_FILE logs presence"
+    echo "  ⚠️  Noch nicht bereit – prüfe Logs:"
+    echo "     docker logs presenceservice"
 fi
 
-# ── 7. systemd Service einrichten ────────────────────────────
-info "Richte systemd Service ein..."
-
-cat > /etc/systemd/system/${SERVICE_NAME}.service << EOF
-[Unit]
-Description=PresenceService (Docker Compose)
-Requires=docker.service
-After=docker.service network-online.target
-Wants=network-online.target
-
-[Service]
-Type=oneshot
-RemainAfterExit=yes
-WorkingDirectory=${WORK_DIR}
-ExecStart=/usr/bin/docker compose -f ${WORK_DIR}/${COMPOSE_FILE} up -d
-ExecStop=/usr/bin/docker compose -f ${WORK_DIR}/${COMPOSE_FILE} down
-ExecReload=/usr/bin/docker compose -f ${WORK_DIR}/${COMPOSE_FILE} restart
-TimeoutStartSec=120
-Restart=on-failure
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-systemctl daemon-reload
-systemctl enable "${SERVICE_NAME}"
-info "systemd Service '${SERVICE_NAME}' aktiviert"
-
-# ── 8. Zusammenfassung ────────────────────────────────────────
 echo ""
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo -e "${GREEN}  Deployment abgeschlossen!${NC}"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "=== Deploy abgeschlossen: $(date) ==="
 echo ""
-echo "  Nützliche Befehle:"
-echo ""
-echo "  Status prüfen:    systemctl status ${SERVICE_NAME}"
-echo "  Logs anzeigen:    docker compose -f ${COMPOSE_FILE} logs -f"
-echo "  Neu starten:      systemctl restart ${SERVICE_NAME}"
-echo "  Stoppen:          systemctl stop ${SERVICE_NAME}"
-echo "  Health Check:     curl http://localhost:8000/health"
-echo ""
-echo "  Nächster Schritt: Cloudflare Route einrichten"
-echo "  → presence.freischule.info → http://<server-ip>:8000"
-echo ""
+echo "  Logs:      docker logs -f presenceservice"
+echo "  Stoppen:   docker stop presenceservice presence-redis"
+echo "  Neustart:  docker restart presenceservice"
