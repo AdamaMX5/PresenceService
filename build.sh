@@ -6,6 +6,16 @@ set -e
 
 echo "=== PresenceService Deploy ==="
 
+# ── Docker Network erstellen ──────────────────────────────────
+echo ""
+echo "--- Network ---"
+if docker network ls | grep -q presence-net; then
+    echo "  ✅ Network presence-net existiert bereits"
+else
+    docker network create presence-net
+    echo "  ✅ Network presence-net erstellt"
+fi
+
 # ── Redis starten (falls nicht läuft) ────────────────────────
 echo ""
 echo "--- Redis ---"
@@ -17,6 +27,7 @@ else
 
     docker run -d \
       --name presence-redis \
+      --network presence-net \
       --restart unless-stopped \
       redis:7-alpine \
       redis-server --save "" --appendonly no
@@ -39,8 +50,8 @@ echo ""
 echo "--- Start ---"
 docker run -d \
   --name presenceservice \
+  --network presence-net \
   -p 8002:8000 \
-  --link presence-redis:redis \
   --env-file .env \
   --restart unless-stopped \
   presenceservice
