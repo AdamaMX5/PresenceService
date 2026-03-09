@@ -1,0 +1,36 @@
+# docker-compose-presence.yml
+# Produktiv-Compose für den Server – nur PresenceService + Redis
+# Auth-Service läuft separat auf auth.freischule.info
+
+services:
+
+  redis:
+    image: redis:7-alpine
+    restart: always
+    command: redis-server --save "" --appendonly no
+    # Kein Port-Mapping – nur intern erreichbar
+    networks:
+      - presence-net
+
+  presence:
+    build: .
+    restart: always
+    ports:
+      - "8002:8000"
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - AUTH_SERVICE_URL=${AUTH_SERVICE_URL:-https://auth.freischule.info}
+    depends_on:
+      - redis
+    networks:
+      - presence-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+networks:
+  presence-net:
+    driver: bridge

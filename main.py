@@ -365,7 +365,10 @@ async def presence_ws(websocket: WebSocket, token: str = None):
         })
 
         # Redis-Eintrag löschen
-        await redis_client.delete(f"pos:{user_id}")
+        try:
+            await redis_client.delete(f"pos:{user_id}")
+        except Exception as e:
+            logger.warning("Redis delete failed for %s: %s", user_id, e)
 
 
 @app.get("/")
