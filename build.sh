@@ -28,7 +28,7 @@ docker run -d \
   --network presence-net \
   --restart unless-stopped \
   redis:7-alpine \
-  redis-server --save "" --appendonly no
+  redis-server --save "" --appendonly no --maxmemory 128mb --maxmemory-policy allkeys-lru
 
 echo "  ✅ Redis gestartet"
 
@@ -56,7 +56,16 @@ docker run -d \
   --restart unless-stopped \
   presenceservice
 
-docker network disconnect bridge presenceservice 2>/dev/null || true
+NETWORK=$(docker inspect presenceservice --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}}')
+echo "  Container-Netzwerk: $NETWORK"
+if [ "$NETWORK" = "presence-net" ]; then
+    echo "  ✅ Netzwerk korrekt"
+else
+    echo "  ⚠️  Falsches Netzwerk! Versuche Fix..."
+    docker network disconnect bridge presenceservice 2>/dev/null || true
+    docker network connect presence-net presenceservice 2>/dev/null || true
+    docker restart presenceservice
+fi
 
 echo "  ✅ PresenceService gestartet auf Port 8002"
 

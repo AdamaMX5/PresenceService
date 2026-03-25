@@ -116,14 +116,19 @@ class PresenceManager:
         }
 
         # 1. Position in Redis persistieren (für neue Pods / Reconnects)
-        await redis_client.set(
-            f"pos:{user_id}",
-            json.dumps({"x": x, "y": y, "name": mover.name, "department": mover.department}),
-            ex=3600  # TTL: 1 Stunde
-        )
+        try:
+            await redis_client.set(
+                f"pos:{user_id}",
+                json.dumps({"x": x, "y": y, "name": mover.name, "department": mover.department}),
+                ex=3600  # TTL: 1 Stunde
+            )
 
-        # 2. Über Redis Pub/Sub an alle anderen Pods publishen
-        await redis_client.publish(CHANNEL_NAME, json.dumps(update))
+            # 2. Über Redis Pub/Sub an alle anderen Pods publishen
+            await redis_client.publish(CHANNEL_NAME, json.dumps(update))
+        except Exception as e:
+            logger.warning("[Redis] handle_move failed for %s: %s — closing connection", user_id, e)
+            await mover.websocket.close(code=1011)
+            raise WebSocketDisconnect(code=1011)
 
         # 3. Lokale User nach Distanz einteilen und updaten
         await self._distribute_by_distance(user_id, update)
@@ -211,19 +216,25 @@ async def flush_loop_10s():
 
 
 async def redis_subscriber():
-    """Lauscht auf den Redis Pub/Sub Channel und leitet an lokale User weiter."""
-    pubsub = redis_client.pubsub()
-    await pubsub.subscribe(CHANNEL_NAME)
-    print(f"[Redis] Subscribed to channel '{CHANNEL_NAME}'")
-
-    async for message in pubsub.listen():
-        if message["type"] != "message":
-            continue
+    """Lauscht auf den Redis Pub/Sub Channel und leitet an lokale User weiter.
+    Reconnectet automatisch bei Redis-Ausfall."""
+    while True:
         try:
-            data = json.loads(message["data"])
-            await manager.handle_redis_message(data)
+            pubsub = redis_client.pubsub()
+            await pubsub.subscribe(CHANNEL_NAME)
+            print(f"[Redis] Subscribed to channel '{CHANNEL_NAME}'")
+
+            async for message in pubsub.listen():
+                if message["type"] != "message":
+                    continue
+                try:
+                    data = json.loads(message["data"])
+                    await manager.handle_redis_message(data)
+                except Exception as e:
+                    print(f"[Redis] Message error: {e}")
         except Exception as e:
-            print(f"[Redis] Error: {e}")
+            print(f"[Redis] Subscriber disconnected: {e} — reconnecting in 2s")
+            await asyncio.sleep(2)
 
 
 # ─── Lifespan ────────────────────────────────────────────────
@@ -355,7 +366,7 @@ async def presence_ws(websocket: WebSocket, token: str = None):
                         reason="Invalid refresh token"
                     )
 
-    except WebSocketDisconnect:
+    except (WebSocketDisconnect, Exception):
         manager.disconnect(user_id)
 
         # Allen anderen mitteilen
