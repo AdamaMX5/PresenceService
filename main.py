@@ -6,14 +6,25 @@ import os
 import asyncio
 import json
 import math
+import uuid
 import jwt
 import httpx
 from contextlib import asynccontextmanager
 
 import redis.asyncio as aioredis
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request as StarletteRequest
 
 import logging
+from log_buffer import InMemoryLogHandler, request_id_var
+
 logger = logging.getLogger(__name__)
+
+# ─── In-Memory Log Handler ───────────────────────────────────
+_mem_handler = InMemoryLogHandler()
+_mem_handler.setFormatter(logging.Formatter("%(message)s"))
+logging.getLogger().addHandler(_mem_handler)
+logging.getLogger().setLevel(logging.DEBUG)
 
 # ─── Distanz-Schwellen (in Metern) ───────────────────────────
 NEAR_DIST = 25.0    # instant
@@ -256,7 +267,23 @@ async def lifespan(app: FastAPI):
 
 
 # ─── App ─────────────────────────────────────────────────────
+from admin_router import router as admin_router  # noqa: E402 (after app setup)
+
+
+class RequestIDMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: StarletteRequest, call_next):
+        req_id = str(uuid.uuid4())
+        token = request_id_var.set(req_id)
+        try:
+            response = await call_next(request)
+            response.headers["X-Request-ID"] = req_id
+            return response
+        finally:
+            request_id_var.reset(token)
+
+
 app = FastAPI(lifespan=lifespan)
+app.add_middleware(RequestIDMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -270,6 +297,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.include_router(admin_router)
 
 PUBLIC_KEY = None
 AUTH_SERVICE_URL = os.getenv("AUTH_SERVICE_URL", "https://auth.freischule.info")
