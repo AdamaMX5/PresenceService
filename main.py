@@ -255,21 +255,32 @@ async def lifespan(app: FastAPI):
     print("[Redis] Disconnected")
 
 
+# ─── CORS ────────────────────────────────────────────────────
+def _get_cors_settings() -> dict:
+    raw_origins = os.getenv("CORS_ORIGINS", "")
+    origins = [o.strip() for o in raw_origins.split(",") if o.strip()]
+    if not origins:
+        logger.warning("CORS_ORIGINS is not set — no origins allowed")
+
+    raw_methods = os.getenv("CORS_METHODS", "*")
+    methods = [m.strip() for m in raw_methods.split(",") if m.strip()] or ["*"]
+
+    raw_headers = os.getenv("CORS_HEADERS", "*")
+    headers = [h.strip() for h in raw_headers.split(",") if h.strip()] or ["*"]
+
+    credentials = os.getenv("CORS_ALLOW_CREDENTIALS", "true").lower() == "true"
+
+    return {
+        "allow_origins": origins,
+        "allow_methods": methods,
+        "allow_headers": headers,
+        "allow_credentials": credentials,
+    }
+
+
 # ─── App ─────────────────────────────────────────────────────
 app = FastAPI(lifespan=lifespan)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5500",  # Live Server Extension
-        "http://127.0.0.1:5500",
-        "http://localhost:3000",  # Falls SvelteKit
-        "null",  # file:// öffnet mit Origin "null"
-        "*", # Development
-    ],      # Für Dev alles erlauben
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+app.add_middleware(CORSMiddleware, **_get_cors_settings())
 
 PUBLIC_KEY = None
 AUTH_SERVICE_URL = os.getenv("AUTH_SERVICE_URL", "https://auth.freischule.info")
