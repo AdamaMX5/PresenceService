@@ -377,6 +377,10 @@ async def presence_ws(websocket: WebSocket, token: str = None):
                         reason="Invalid refresh token"
                     )
 
+            elif data.get("type"):
+                # Unbekannte Typen: mit user_id anreichern und an alle anderen broadcasten
+                await manager._broadcast_except(user_id, {**data, "user_id": user_id})
+
     except (WebSocketDisconnect, Exception):
         manager.disconnect(user_id)
 
